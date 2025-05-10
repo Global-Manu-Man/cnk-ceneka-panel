@@ -1,67 +1,63 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
-import { Edit2, Trash2, Home } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { useFirebaseAuth } from '../contexts/FirebaseAuthContext';
 
 interface Property {
-  id: string;
+  id: number;
   title: string;
-  price: string;
-  image: string;
+  price: number;
+  location: string;
   beds: number;
   baths: number;
   sqft: number;
-  location: string;
+  images: string[];
+  created_at: string;
 }
 
 export default function PropertyList() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
+  const { idToken, isAuthenticated } = useFirebaseAuth();
 
-  useEffect(() => {
-    fetchProperties();
-  }, []);
-
-  async function fetchProperties() {
+  const fetchProperties = async () => {
     try {
-      const { data, error } = await supabase
-        .from('properties')
-        .select('*')
-        .order('created_at', { ascending: false });
+      if (!isAuthenticated || !idToken) {
+        throw new Error('Authentication required');
+      }
 
-      if (error) throw error;
-      setProperties(data || []);
+      const response = await fetch('https://cnk-ceneka.onrender.com/api/properties', {
+        headers: {
+          'Authorization': `Bearer ${idToken}`
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to fetch properties');
+      }
+
+      const data = await response.json();
+      
+      // Validar y transformar los datos
+      const validProperties = Array.isArray(data) ? data : [];
+      setProperties(validProperties);
     } catch (err) {
       console.error('Error fetching properties:', err);
-      setError('Failed to load properties');
+      setError(err instanceof Error ? err.message : 'Failed to fetch properties');
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  async function handleDelete(id: string) {
-    if (!window.confirm('Are you sure you want to delete this property?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('properties')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      setProperties(properties.filter(property => property.id !== id));
-    } catch (err) {
-      console.error('Error deleting property:', err);
-      alert('Failed to delete property');
-    }
-  }
+  useEffect(() => {
+    fetchProperties();
+  }, [idToken, isAuthenticated]);
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
@@ -75,65 +71,66 @@ export default function PropertyList() {
   }
 
   return (
-    <div className="bg-white shadow rounded-lg overflow-hidden">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 p-4">
-        {properties.map((property) => (
-          <div
-            key={property.id}
-            className="border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div className="aspect-w-16 aspect-h-9">
-              <img
-                src={property.image}
-                alt={property.title}
-                className="object-cover w-full h-48"
-              />
-            </div>
-            <div className="p-4">
-              <div className="flex items-start justify-between">
-                <h3 className="text-lg font-semibold text-gray-900 truncate">
-                  {property.title}
-                </h3>
-                <p className="text-lg font-bold text-indigo-600">{property.price}</p>
-              </div>
-              <div className="mt-2 flex items-center text-sm text-gray-500">
-                <Home className="h-4 w-4 mr-1" />
-                <span>{property.location}</span>
-              </div>
-              <div className="mt-2 flex items-center space-x-4 text-sm text-gray-500">
-                <span>{property.beds} beds</span>
-                <span>{property.baths} baths</span>
-                <span>{property.sqft} sqft</span>
-              </div>
-              <div className="mt-4 flex justify-end space-x-2">
-                <button
-                  onClick={() => navigate(`/dashboard/properties/${property.id}`)}
-                  className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                >
-                  <Edit2 className="h-4 w-4 mr-1" />
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(property.id)}
-                  className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-sm font-medium rounded text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-                >
-                  <Trash2 className="h-4 w-4 mr-1" />
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
+    <div className="bg-white shadow rounded-lg">
+      <div className="px-4 py-5 sm:px-6 flex justify-between items-center">
+        <h2 className="text-lg font-medium text-gray-900">Properties</h2>
+        <Link
+          to="/properties/new"
+          className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+        >
+          Add Property
+        </Link>
       </div>
-      
-      {properties.length === 0 && (
-        <div className="text-center py-12">
-          <h3 className="text-lg font-medium text-gray-900">No properties found</h3>
-          <p className="mt-1 text-sm text-gray-500">
-            Get started by adding your first property.
-          </p>
-        </div>
-      )}
+      <div className="border-t border-gray-200">
+        {properties.length === 0 ? (
+          <div className="text-center py-12">
+            <h3 className="text-lg font-medium text-gray-900">No properties found</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Get started by adding your first property.
+            </p>
+          </div>
+        ) : (
+          <ul className="divide-y divide-gray-200">
+            {properties.map((property) => (
+              <li key={property.id} className="px-4 py-4 sm:px-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    {property.images?.[0] && (
+                      <img
+                        src={property.images[0]}
+                        alt={property.title}
+                        className="h-16 w-16 object-cover rounded-lg"
+                      />
+                    )}
+                    <div className="ml-4">
+                      <h3 className="text-lg font-medium text-gray-900">
+                        {property.title || 'Untitled Property'}
+                      </h3>
+                      <p className="text-sm text-gray-500">{property.location || 'No location specified'}</p>
+                      <div className="mt-1 flex items-center text-sm text-gray-500">
+                        <span className="mr-4">{property.beds || 0} beds</span>
+                        <span className="mr-4">{property.baths || 0} baths</span>
+                        <span>{property.sqft || 0} sqft</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center">
+                    <span className="text-lg font-medium text-gray-900">
+                      ${(property.price || 0).toLocaleString()}
+                    </span>
+                    <Link
+                      to={`/properties/${property.id}`}
+                      className="ml-4 inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                      View
+                    </Link>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

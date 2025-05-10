@@ -1,6 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
 import { X } from 'lucide-react';
 import { useFirebaseAuth } from '../contexts/FirebaseAuthContext';
 import Select, { MultiValue, StylesConfig, ControlProps, OptionProps, SingleValue } from 'react-select';
@@ -55,6 +54,12 @@ interface PropertyFormData {
   state: string;
   municipality: string;
   colony: string;
+}
+
+interface PostalCodeResponse {
+  estado: string;
+  municipio: string;
+  colonias: string[];
 }
 
 // Valor estático para property_code
@@ -197,6 +202,11 @@ const featureStyles: StylesConfig<FeatureOption, true> = {
   })
 };
 
+// Componente Spinner
+const Spinner = () => (
+  <div className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]" />
+);
+
 export default function PropertyForm() {
   const [formData, setFormData] = useState<PropertyFormData>(initialFormData);
   const [loading, setLoading] = useState(false);
@@ -204,65 +214,10 @@ export default function PropertyForm() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [colonyOptions, setColonyOptions] = useState<ColonyOption[]>([]);
   const [postalCodeError, setPostalCodeError] = useState<string | null>(null);
+  const [isLoadingPostalCode, setIsLoadingPostalCode] = useState(false);
   const navigate = useNavigate();
   const { id } = useParams();
   const { idToken, isAuthenticated } = useFirebaseAuth();
-
-  // Crear el bucket si no existe
-  useEffect(() => {
-    const createImagesBucket = async () => {
-      try {
-        // Verificar si el bucket existe
-        const { data: buckets } = await supabase
-          .storage
-          .listBuckets();
-
-        const bucketExists = buckets?.some(bucket => bucket.name === 'images');
-
-        if (!bucketExists) {
-          // Crear el bucket si no existe
-          const { error } = await supabase
-            .storage
-            .createBucket('images', {
-              public: true, // Hacer el bucket público
-              fileSizeLimit: 5242880, // Límite de 5MB por archivo
-            });
-
-          if (error) {
-            console.error('Error creating bucket:', error);
-          }
-        }
-      } catch (err) {
-        console.error('Error checking/creating bucket:', err);
-      }
-    };
-
-    createImagesBucket();
-  }, []);
-
-  const fetchProperty = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from('properties')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        setFormData(data);
-      }
-    } catch (err) {
-      console.error('Error fetching property:', err);
-      setError('Failed to load property');
-    }
-  }, [id]);
-
-  useEffect(() => {
-    if (id) {
-      fetchProperty();
-  }
-  }, [id, fetchProperty]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
@@ -283,7 +238,7 @@ export default function PropertyForm() {
 
   const removeImage = (index: number) => {
       setFormData((prev) => ({
-      ...prev,
+        ...prev,
       images: prev.images.filter((_, i) => i !== index),
     }));
   };
@@ -293,49 +248,6 @@ export default function PropertyForm() {
       const filesArray = Array.from(e.target.files);
       setSelectedFiles(filesArray);
       setError(null);
-    }
-  };
-
-  const uploadImages = async () => {
-    if (selectedFiles.length < 10) {
-      setError('Please select at least 10 images');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const uploadedUrls: string[] = [];
-      
-      for (const file of selectedFiles) {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
-        const filePath = `property-images/${fileName}`;
-        
-        const { error: uploadError } = await supabase.storage
-          .from('images')
-          .upload(filePath, file);
-          
-        if (uploadError) throw uploadError;
-        
-        const { data: { publicUrl } } = supabase.storage
-          .from('images')
-          .getPublicUrl(filePath);
-          
-        uploadedUrls.push(publicUrl);
-      }
-      
-      setFormData(prev => ({
-        ...prev,
-        images: [...prev.images, ...uploadedUrls]
-      }));
-      
-      setSelectedFiles([]);
-      setError(null);
-    } catch (err) {
-      console.error('Error uploading images:', err);
-      setError('Failed to upload images');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -379,6 +291,7 @@ export default function PropertyForm() {
 
   const fetchPostalCodeData = async (postalCode: string) => {
     try {
+      setIsLoadingPostalCode(true);
       setPostalCodeError(null);
 
       if (!isAuthenticated || !idToken) {
@@ -390,14 +303,24 @@ export default function PropertyForm() {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${idToken}`
-        }
+        },
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
-        throw new Error('Error al consultar el código postal');
+        // Si el código postal no se encuentra, permitir entrada manual
+        setPostalCodeError('Código postal no encontrado. Por favor, ingresa los datos manualmente.');
+        setFormData(prev => ({
+          ...prev,
+          state: '',
+          municipality: '',
+          colony: ''
+        }));
+        setColonyOptions([]);
+        return;
       }
 
-      const data = await response.json();
+      const data: PostalCodeResponse = await response.json();
 
       // Actualizar el estado con los datos recibidos
       setFormData(prev => ({
@@ -423,7 +346,7 @@ export default function PropertyForm() {
 
     } catch (err) {
       console.error('Error fetching postal code data:', err);
-      setPostalCodeError(err instanceof Error ? err.message : 'Error al consultar el código postal');
+      setPostalCodeError('Error al consultar el código postal. Por favor, ingresa los datos manualmente.');
       
       // Limpiar los campos relacionados en caso de error
       setFormData(prev => ({
@@ -433,6 +356,8 @@ export default function PropertyForm() {
         colony: ''
       }));
       setColonyOptions([]);
+    } finally {
+      setIsLoadingPostalCode(false);
     }
   };
 
@@ -474,105 +399,60 @@ export default function PropertyForm() {
         throw new Error('You must be authenticated to submit properties');
       }
 
-      // Si hay archivos seleccionados, subirlos primero
+      // Crear FormData para el envío
+      const formDataToSend = new FormData();
+
+      // Mapear campos específicos con nombres correctos para la API
+      formDataToSend.append('client', formData.client);
+      formDataToSend.append('property_code', formData.property_code);
+      formDataToSend.append('property_type_id', formData.property_type_id.toString());
+      formDataToSend.append('sale_type_id', formData.sale_type_id.toString());
+      formDataToSend.append('legal_status_id', formData.legal_status_id.toString());
+      formDataToSend.append('price', formData.price.replace(/[^0-9.-]+/g, ''));
+      formDataToSend.append('commercial_value', formData.commercial_value.toString());
+      formDataToSend.append('street', formData.street || formData.location.split(',')[0] || '');
+      formDataToSend.append('exterior_number', formData.exterior_number || 'N/A');
+      formDataToSend.append('postal_code', formData.postal_code || '00000');
+      formDataToSend.append('land_size', formData.land_size.toString());
+      formDataToSend.append('sqft', formData.sqft.toString());
+      formDataToSend.append('bedrooms', formData.beds.toString()); // Mapear beds a bedrooms
+      formDataToSend.append('bathrooms', formData.baths.toString()); // Mapear baths a bathrooms
+      formDataToSend.append('parking_spaces', formData.parking_spaces.toString());
+      formDataToSend.append('title', formData.title);
+      formDataToSend.append('description', formData.description);
+      formDataToSend.append('state', formData.state);
+      formDataToSend.append('municipality', formData.municipality);
+      formDataToSend.append('colony', formData.colony);
+
+      // Añadir features
+      formData.features.forEach(feature => {
+        formDataToSend.append('features', feature);
+      });
+
+      // Añadir imágenes
       if (selectedFiles.length > 0) {
-        const uploadedUrls: string[] = [];
-        
-        for (const file of selectedFiles) {
-          const fileExt = file.name.split('.').pop();
-          const fileName = `${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
-          const filePath = `property-images/${fileName}`;
-          
-          const { error: uploadError } = await supabase.storage
-            .from('images')
-            .upload(filePath, file);
-            
-          if (uploadError) throw uploadError;
-          
-          const { data: { publicUrl } } = supabase.storage
-            .from('images')
-            .getPublicUrl(filePath);
-            
-          uploadedUrls.push(publicUrl);
-        }
-        
-        // Actualizar formData con las nuevas URLs
-        formData.images = [...formData.images, ...uploadedUrls];
+        selectedFiles.forEach(file => {
+          formDataToSend.append('images', file);
+        });
       }
 
-      // Validar el número total de imágenes después de la subida
-      if (formData.images.length < 10) {
-        throw new Error(`Debes proporcionar al menos 10 imágenes para registrar la propiedad. Tienes ${formData.images.length} imágenes.`);
+      // Validar el número total de imágenes
+      if (formData.images.length + selectedFiles.length < 10) {
+        throw new Error(`Debes proporcionar al menos 10 imágenes para registrar la propiedad. Tienes ${formData.images.length + selectedFiles.length} imágenes.`);
       }
-
-      // Asegurar que property_code siempre tenga el valor estático
-      const formDataToSubmit = {
-        ...formData,
-        property_code: STATIC_PROPERTY_CODE
-      };
-      
-      // Calculate commercial value if not provided
-      const priceValue = parseFloat(formDataToSubmit.price.replace(/[^0-9.-]+/g, ''));
-      const commercialValue = formDataToSubmit.commercial_value || priceValue * 1.25;
-      
-      // Calculate land size in square meters if not provided
-      const landSize = formDataToSubmit.land_size || formDataToSubmit.sqft / 10.764;
-
-      // Prepare the API request payload
-      const apiPayload = {
-        client: formDataToSubmit.client,
-        property_code: formDataToSubmit.property_code,
-        property_type_id: formDataToSubmit.property_type_id,
-        sale_type_id: formDataToSubmit.sale_type_id,
-        legal_status_id: formDataToSubmit.legal_status_id,
-        price: priceValue,
-        commercial_value: commercialValue,
-        street: formDataToSubmit.street || formDataToSubmit.location.split(',')[0] || '',
-        exterior_number: formDataToSubmit.exterior_number || 'N/A',
-        postal_code: formDataToSubmit.postal_code || '00000',
-        land_size: landSize,
-        sqft: formDataToSubmit.sqft,
-        bedrooms: formDataToSubmit.beds,
-        bathrooms: formDataToSubmit.baths,
-        parking_spaces: formDataToSubmit.parking_spaces,
-        title: formDataToSubmit.title,
-        description: formDataToSubmit.description,
-        state: formDataToSubmit.state,
-        municipality: formDataToSubmit.municipality,
-        colony: formDataToSubmit.colony,
-        features: formDataToSubmit.features,
-        images: formDataToSubmit.images,
-      };
 
       // Submit to the API
       const response = await fetch('https://cnk-ceneka.onrender.com/api/properties', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           'Authorization': `Bearer ${idToken}`,
         },
-        body: JSON.stringify(apiPayload),
+        body: formDataToSend
       });
 
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || 'Failed to create property');
-      }
-
-      // If successful, also save to Supabase for local storage
-      if (id) {
-        // Update existing property in Supabase
-        const { error: supabaseError } = await supabase
-          .from('properties')
-          .update(formDataToSubmit)
-          .eq('id', id);
-        if (supabaseError) throw supabaseError;
-      } else {
-        // Create new property in Supabase
-        const { error: supabaseError } = await supabase
-          .from('properties')
-          .insert([formDataToSubmit]);
-        if (supabaseError) throw supabaseError;
       }
 
       navigate('/dashboard');
@@ -719,17 +599,24 @@ export default function PropertyForm() {
             <label htmlFor="postal_code" className="block text-sm font-medium text-gray-700">
               Código Postal
             </label>
-            <input
-              type="text"
-              id="postal_code"
-              name="postal_code"
-              value={formData.postal_code}
-              onChange={handlePostalCodeChange}
-              maxLength={5}
-              pattern="[0-9]*"
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-              placeholder="Ingresa el código postal"
-            />
+            <div className="mt-1 relative">
+              <input
+                type="text"
+                id="postal_code"
+                name="postal_code"
+                value={formData.postal_code}
+                onChange={handlePostalCodeChange}
+                maxLength={5}
+                pattern="[0-9]*"
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                placeholder="Ingresa el código postal"
+              />
+              {isLoadingPostalCode && (
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                  <Spinner />
+                </div>
+              )}
+            </div>
             {postalCodeError && (
               <p className="mt-1 text-sm text-red-600">{postalCodeError}</p>
             )}
@@ -837,8 +724,8 @@ export default function PropertyForm() {
               id="state"
               name="state"
               value={formData.state}
-              readOnly
-              className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm"
+              onChange={handleInputChange}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
             />
           </div>
 
@@ -851,8 +738,8 @@ export default function PropertyForm() {
               id="municipality"
               name="municipality"
               value={formData.municipality}
-              readOnly
-              className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm"
+              onChange={handleInputChange}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
             />
           </div>
 
@@ -860,21 +747,30 @@ export default function PropertyForm() {
             <label htmlFor="colony" className="block text-sm font-medium text-gray-700">
               Colonia
             </label>
-            <Select<ColonyOption>
-              options={colonyOptions}
-              value={colonyOptions.find(option => option.value === formData.colony)}
-              onChange={handleColonyChange}
-              className="mt-1"
-              classNamePrefix="select"
-              placeholder="Selecciona una colonia"
-              isClearable={true}
-              isSearchable={true}
-              isDisabled={colonyOptions.length === 0}
-            />
-            {colonyOptions.length === 0 && formData.postal_code && !postalCodeError && (
-              <p className="mt-1 text-sm text-gray-500">
-                Ingresa un código postal válido para ver las colonias disponibles
-              </p>
+            {colonyOptions.length > 0 ? (
+              <Select<ColonyOption>
+                options={colonyOptions}
+                value={colonyOptions.find(option => option.value === formData.colony)}
+                onChange={handleColonyChange}
+                className="mt-1"
+                classNamePrefix="select"
+                placeholder="Selecciona una colonia"
+                isClearable={true}
+                isSearchable={true}
+              />
+            ) : (
+              <input
+                type="text"
+                id="colony"
+                name="colony"
+                value={formData.colony}
+                onChange={handleInputChange}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                placeholder="Ingresa la colonia"
+              />
+            )}
+            {postalCodeError && (
+              <p className="mt-1 text-sm text-red-600">{postalCodeError}</p>
             )}
           </div>
         </div>
@@ -934,14 +830,6 @@ export default function PropertyForm() {
             {selectedFiles.length > 0 && (
               <div className="mt-2">
                 <p className="text-sm text-gray-500">{selectedFiles.length} files selected</p>
-            <button
-              type="button"
-                  onClick={uploadImages}
-                  disabled={loading || selectedFiles.length < 10}
-                  className="mt-2 inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-            >
-                  {loading ? 'Uploading...' : 'Upload Images'}
-            </button>
               </div>
             )}
             {error && selectedFiles.length < 10 && (
